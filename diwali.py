@@ -9,7 +9,8 @@
 ✅ Owner commands for YouTube: /setyoutube <url> and /removeyoutube
 ✅ Telegram Premium animated emojis & channel admin checker built-in.
 ✅ Fixed Web App HTTPS URL requirement: /start works every single time!
-=============================================================================
+=========
+====================================================================
 """
 
 import os
@@ -61,7 +62,10 @@ PERMANENT_CHANNELS = [
 # ---------------------------------------------------------------------------
 DEFAULT_OWNERS = [
     "rohit79041",
+    "boss6578",
     "lakhsmiiiii",
+    "6612581369",
+    "8751187524",
 ]
 
 # ---------------------------------------------------------------------------
@@ -352,19 +356,44 @@ _OWNERS_CACHE = set(o.lower().lstrip("@") for o in DEFAULT_OWNERS)
 _LAST_CACHE_TIME = 0
 
 
+def normalize_url(url: str, default_prefix: str = "https://t.me/") -> str:
+    if not url:
+        return ""
+    url = str(url).strip()
+    if url.startswith("http://"):
+        return "https://" + url[7:]
+    if url.startswith("https://"):
+        return url
+    if url.startswith("@"):
+        return f"https://t.me/{url[1:]}"
+    if url.startswith("+"):
+        return f"https://t.me/{url}"
+    if "t.me/" in url or "telegram.me/" in url or "youtube.com" in url or "youtu.be" in url:
+        return f"https://{url.lstrip('/')}"
+    return f"{default_prefix}{url.lstrip('/')}"
+
+
 def pe(char: str) -> str:
-    # Native Telegram Unicode emojis for guaranteed HD rendering on all devices
+    # Use native Telegram Unicode emojis for 100% guaranteed HD rendering on all devices
     return char
 
 
 def pbtn(text: str, emoji_char: str = None, **kwargs) -> dict:
     btn = {"text": text}
+    # Enforce valid HTTPS URLs on normal links to prevent 'Wrong HTTP URL' errors
+    if "url" in kwargs and kwargs["url"]:
+        btn["url"] = normalize_url(kwargs["url"])
     # Enforce HTTPS on web_app URLs to prevent Telegram 400 Bad Request
     if "web_app" in kwargs and isinstance(kwargs["web_app"], dict):
-        wa_url = kwargs["web_app"].get("url", "")
+        wa_url = str(kwargs["web_app"].get("url", "")).strip()
         if wa_url.startswith("http://"):
             kwargs["web_app"]["url"] = "https://" + wa_url[7:]
-    btn.update(kwargs)
+        elif not wa_url.startswith("https://"):
+            kwargs["web_app"]["url"] = "https://" + wa_url
+        btn["web_app"] = kwargs["web_app"]
+    for k, v in kwargs.items():
+        if k not in ["url", "web_app"]:
+            btn[k] = v
     return btn
 
 
@@ -381,6 +410,8 @@ def clean_markup_for_fallback(reply_markup: dict) -> dict:
         for b in row:
             cb = dict(b)
             cb.pop("icon_custom_emoji_id", None)
+            if "url" in cb and cb["url"]:
+                cb["url"] = normalize_url(cb["url"])
             clean_row.append(cb)
         clean_rows.append(clean_row)
     return {"inline_keyboard": clean_rows}
@@ -392,7 +423,7 @@ def send_message_smart(chat_id, text: str, reply_markup: dict = None, parse_mode
         return res
 
     logger.warning(f"send_message retry for [{chat_id}]: {res.get('description')}")
-    # Fallback 1: Remove custom icon fields
+    # Fallback 1: Clean and sanitize markup URLs
     fallback_markup = clean_markup_for_fallback(reply_markup)
     res = send_message(chat_id, text, reply_markup=fallback_markup, parse_mode=parse_mode)
     if res.get("ok"):
@@ -419,6 +450,11 @@ def send_message_smart(chat_id, text: str, reply_markup: dict = None, parse_mode
         res = send_message(chat_id, plain_text, reply_markup={"inline_keyboard": url_rows}, parse_mode=None)
         if res.get("ok"):
             return res
+
+    # Fallback 4: Message without markup
+    res = send_message(chat_id, plain_text, reply_markup=None, parse_mode=None)
+    if res.get("ok"):
+        return res
 
     logger.error(f"❌ Telegram sendMessage permanent error [{chat_id}]: {res.get('description')}")
     return res
@@ -472,8 +508,10 @@ def load_channels() -> list[dict]:
             items = list(remote.values()) if isinstance(remote, dict) else remote
             for item in items:
                 if isinstance(item, dict) and item.get("id"):
-                    if not any(str(c.get("id")) == str(item["id"]) for c in combined):
-                        combined.append(item)
+                    item_copy = dict(item)
+                    item_copy["url"] = normalize_url(item_copy.get("url", ""))
+                    if not any(str(c.get("id")) == str(item_copy["id"]) for c in combined):
+                        combined.append(item_copy)
     except Exception as e:
         logger.warning(f"Error loading channels: {e}")
 
@@ -538,7 +576,7 @@ def check_user_channels(user_id: int) -> tuple[bool, list[dict]]:
     unjoined = []
     for ch in channels:
         ch_id = str(ch.get("id", "")).strip()
-        target = int(ch_id) if ch_id.lstrip("-").isdigit() else ch_id
+        target = int(ch_id) if ch_id.lstrip("-").isdigit() else clean_id = ch_id
 
         if is_channel_joined_in_db(str(user_id), ch_id):
             continue
@@ -639,8 +677,11 @@ def handle_start(chat_id, user: dict, args: list[str]):
         )
         return
 
-    # User already verified -> Send ONLY the post-join message with OPEN GIVEAWAY button
-    if existing.get("isVerified") and not existing.get("deviceBlocked"):
+    # Check current channel membership status
+    all_joined, unjoined = check_user_channels(int(user_id))
+
+    # User already verified AND currently joined all channels -> Send verified message with OPEN GIVEAWAY
+    if all_joined and existing.get("isVerified") and not existing.get("deviceBlocked"):
         app_url = f"{WEB_URL}/?uid={user_id}&start=ref_{referrer_id}" if referrer_id else f"{WEB_URL}/?uid={user_id}"
         verified_markup = {
             "inline_keyboard": [
@@ -657,7 +698,7 @@ def handle_start(chat_id, user: dict, args: list[str]):
         logger.info(f"🚀 [{user_id}] Delivered Verified Post-Join markup")
         return
 
-    # Unverified user -> show pre-join message with channels and CLAIM NOW button
+    # Unverified user or channels not yet joined -> show pre-join message with channels and CLAIM NOW button
     channels = load_channels()
     welcome_text = (
         "🎉 <b>WELCOME TO THE GIVEAWAY</b>\n"
@@ -766,6 +807,7 @@ def handle_ownerhelp(chat_id, user: dict):
         f"<b>3. Broadcast & Stats:</b>\n"
         f"• <code>/broadcast Your message</code> (or reply with photo/video/stickers)\n"
         f"• <code>/stats</code> - Total users & database stats\n"
+        f"• <code>/resetme</code> - Apna account reset karke fresh test karein\n"
     )
     send_message_smart(chat_id, text)
 
@@ -777,9 +819,7 @@ def handle_setyoutube(chat_id, user: dict, args: list[str]):
     if not args:
         send_message(chat_id, "❌ Usage: <code>/setyoutube https://youtube.com/@yourchannel</code>")
         return
-    url = args[0].strip()
-    if not url.startswith("http"):
-        url = "https://" + url
+    url = normalize_url(args[0].strip(), default_prefix="https://youtube.com/")
     set_youtube_config(url)
     send_message_smart(chat_id, f"{pe('✅')} <b>YouTube Channel Added!</b>\n\nURL: {url}\nAb sabhi users ko YouTube Subscribe button dikhega.")
 
@@ -826,7 +866,7 @@ def handle_addchannel(chat_id, user: dict, args: list[str]):
 
     cid = args[0].strip()
     cname = args[1].strip()
-    curl = args[2].strip()
+    curl = normalize_url(" ".join(args[2:]).strip())
 
     is_adm, adm_msg = check_bot_channel_admin(cid)
     clean_id = re.sub(r"[^a-zA-Z0-9_-]", "_", cid)
@@ -844,6 +884,7 @@ def handle_addchannel(chat_id, user: dict, args: list[str]):
         f"{pe('✅')} <b>Channel Added Successfully!</b>\n\n"
         f"• Name: {cname}\n"
         f"• ID: <code>{cid}</code>\n"
+        f"• URL: {curl}\n"
         f"• Status: {adm_msg}"
     )
     send_message_smart(chat_id, msg)
@@ -970,18 +1011,32 @@ def process_update(upd: dict):
         chat_id = msg.get("chat", {}).get("id")
         user = msg.get("from") or {}
         text = (msg.get("text") or msg.get("caption") or "").strip()
-
-        if not text.startswith("/"):
+        if not text:
             return
 
-        parts = text.split()
-        cmd = parts[0].split("@")[0].lower()
-        args = parts[1:]
+        if not text.startswith("/"):
+            if text.lower() in ["start", "claim", "giveaway", "hi", "hello"]:
+                cmd = "/start"
+                args = []
+            else:
+                return
+        else:
+            parts = text.split()
+            cmd = parts[0].split("@")[0].lower()
+            args = parts[1:]
+
+        user_id = str(user.get("id", ""))
 
         if cmd == "/start":
             handle_start(chat_id, user, args)
         elif cmd in ["/invite", "/refer"]:
             handle_invite(chat_id, user)
+        elif cmd == "/resetme":
+            # For testing: reset user's verification state
+            db_request(f"users/{user_id}.json", method="PATCH", data={"isVerified": False})
+            db_request(f"channel_joins/{user_id}.json", method="DELETE")
+            send_message_smart(chat_id, "🔄 <b>Account Reset Successful!</b>\nAb aap bilkul naye user ki tarah channel join & claim test kar sakte hain.")
+            handle_start(chat_id, user, [])
         elif cmd == "/ownerhelp":
             handle_ownerhelp(chat_id, user)
         elif cmd == "/setyoutube":
@@ -1022,7 +1077,7 @@ def main():
     bot_me = get_bot_info()
     logger.info(f"✅ Bot Connected: @{bot_me.get('username', BOT_USERNAME)} (ID: {bot_me.get('id')})")
 
-    # Reset chat menu button to default (removes persistent side Open App button as requested)
+    # Reset chat menu button to default
     try:
         tg_api("setChatMenuButton", {"menu_button": {"type": "default"}})
     except Exception as e:
