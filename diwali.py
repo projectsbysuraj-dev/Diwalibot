@@ -9,8 +9,7 @@
 ✅ Owner commands for YouTube: /setyoutube <url> and /removeyoutube
 ✅ Telegram Premium animated emojis & channel admin checker built-in.
 ✅ Fixed Web App HTTPS URL requirement: /start works every single time!
-=========
-====================================================================
+=============================================================================
 """
 
 import os
@@ -576,7 +575,7 @@ def check_user_channels(user_id: int) -> tuple[bool, list[dict]]:
     unjoined = []
     for ch in channels:
         ch_id = str(ch.get("id", "")).strip()
-        target = int(ch_id) if ch_id.lstrip("-").isdigit() else clean_id = ch_id
+        target = int(ch_id) if ch_id.lstrip("-").isdigit() else ch_id
 
         if is_channel_joined_in_db(str(user_id), ch_id):
             continue
