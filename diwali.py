@@ -8,7 +8,7 @@
 ✅ Device verification removed: Users can claim directly to Home!
 ✅ Owner commands for YouTube: /setyoutube <url> and /removeyoutube
 ✅ Telegram Premium animated emojis & channel admin checker built-in.
-✅ Opens 100% strictly inside Telegram Mini App (NO external browser links)!
+✅ Side Menu Button removed as requested!
 =============================================================================
 """
 
@@ -61,10 +61,6 @@ PERMANENT_CHANNELS = [
 # ---------------------------------------------------------------------------
 DEFAULT_OWNERS = [
     "rohit79041",
-    "boss6578",
-    "lakhsmiiiii",
-    "6612581369",
-    "8751187524",
 ]
 
 # ---------------------------------------------------------------------------
@@ -371,6 +367,9 @@ _PREMIUM_EMOJI_MAP = {
     "⚠️": "5312526098985124879",
     "🔄": "5312189624351726761",
     "▶️": "5312409003186199286",
+    "📢": "5312409003186199286",
+    "💰": "5312315739842026355",
+    "🔗": "5312409003186199286",
 }
 
 
@@ -489,18 +488,19 @@ def is_owner(user: dict) -> bool:
 
 def build_channels_keyboard(channels: list[dict], ref_param: str = None) -> dict:
     buttons = []
+    # 2 channels per row with 🔗 JOIN NOW
     for i in range(0, len(channels), 2):
-        row = [pbtn("Join 🛫", emoji_char="🛫", url=channels[i]["url"])]
+        row = [pbtn("🔗 JOIN NOW", url=channels[i]["url"])]
         if i + 1 < len(channels):
-            row.append(pbtn("Join 🛫", emoji_char="🛫", url=channels[i + 1]["url"]))
+            row.append(pbtn("🔗 JOIN NOW", url=channels[i + 1]["url"]))
         buttons.append(row)
 
     yt = get_youtube_config()
     if yt and yt.get("url"):
-        buttons.append([pbtn("▶️ Subscribe YouTube", emoji_char="▶️", url=yt["url"])])
+        buttons.append([pbtn("📢 SUBSCRIBE OUR CHANNEL", url=yt["url"])])
 
     claim_callback = f"claim_{ref_param or 'none'}"
-    buttons.append([pbtn("✔ Claim", emoji_char="✅", callback_data=claim_callback)])
+    buttons.append([pbtn("💰 CLAIM NOW", callback_data=claim_callback)])
     return {"inline_keyboard": buttons}
 
 
@@ -635,28 +635,37 @@ def handle_start(chat_id, user: dict, args: list[str]):
         )
         return
 
-    # User already verified -> ALWAYS send Telegram Mini App button (strictly inside Telegram!)
+    # User already verified -> show giveaway claim button
     if existing.get("isVerified") and not existing.get("deviceBlocked"):
         app_url = f"{WEB_URL}/?uid={user_id}&start=ref_{referrer_id}" if referrer_id else f"{WEB_URL}/?uid={user_id}"
         verified_markup = {
             "inline_keyboard": [
-                [pbtn("🎉 Claim Giveaway", emoji_char="🎉", web_app={"url": app_url})],
+                [pbtn("💰 CLAIM YOUR DIWALI GIVEAWAY NOW!", emoji_char="💰", web_app={"url": app_url})],
                 [pbtn("👥 Refer And Earn", emoji_char="👥", callback_data="my_invite")],
             ]
         }
         verified_text = (
-            f"<b>all channels joined 😲</b>\n\n"
-            f"<b>Claimed your giveaway amount</b>"
+            f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
+            f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
+            f"{pe('🎁')} <b>SUCCESSFULLY JOINED?</b>\n\n"
+            f"{pe('💰')} <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
+            f"❤️ <b>THANK YOU FOR JOINING</b> ❤️"
         )
         send_message_smart(chat_id, verified_text, reply_markup=verified_markup)
         logger.info(f"🚀 [{user_id}] Delivered Verified Home markup")
         return
 
-    # Unverified user -> show channels markup immediately
+    # Unverified user -> show full welcome giveaway banner with channels
     channels = load_channels()
     welcome_text = (
-        f"<b>Welcome to diwali Giveaway bot</b>\n\n"
-        f"<b>Please join all channels for free giveaway</b>"
+        f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
+        f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
+        f"        {pe('✅')} <b>MUST JOIN CHANNEL</b>\n\n"
+        f"{pe('📢')} <b>SUBSCRIBE OUR CHANNEL</b>\n\n"
+        f"━━━━━━━━━━━━━━\n\n"
+        f"{pe('🎁')} <b>SUCCESSFULLY JOINED?</b>\n\n"
+        f"{pe('💰')} <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
+        f"❤️ <b>THANK YOU FOR JOINING</b> ❤️"
     )
     markup = build_channels_keyboard(channels, ref_param)
     send_message_smart(chat_id, welcome_text, reply_markup=markup)
@@ -685,8 +694,12 @@ def handle_claim_callback(query: dict):
         answer_callback_query(query_id, "❌ Please join all channels before claiming!", show_alert=True)
         channels = load_channels()
         welcome_text = (
-            f"<b>Please join all channels for free giveaway</b>\n\n"
-            f"Sabhi channels join karein aur '✔ Claim' par click karein:"
+            f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
+            f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
+            f"        {pe('✅')} <b>MUST JOIN CHANNEL</b>\n\n"
+            f"{pe('📢')} <b>SUBSCRIBE OUR CHANNEL</b>\n\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"⚠️ <b>Please join all channels before claiming!</b>"
         )
         markup = build_channels_keyboard(channels, ref_param)
         edit_message_text_smart(chat_id, message_id, welcome_text, reply_markup=markup)
@@ -699,13 +712,16 @@ def handle_claim_callback(query: dict):
     app_url = f"{WEB_URL}/?uid={user_id}&start={ref_param}" if ref_param else f"{WEB_URL}/?uid={user_id}"
     verified_markup = {
         "inline_keyboard": [
-            [pbtn("🎉 Claim Giveaway", emoji_char="🎉", web_app={"url": app_url})],
+            [pbtn("💰 CLAIM YOUR DIWALI GIVEAWAY NOW!", emoji_char="💰", web_app={"url": app_url})],
             [pbtn("👥 Refer And Earn", emoji_char="👥", callback_data="my_invite")],
         ]
     }
     verified_text = (
-        f"<b>all channels joined 😲</b>\n\n"
-        f"<b>Claimed your giveaway amount</b>"
+        f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
+        f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
+        f"{pe('🎁')} <b>SUCCESSFULLY JOINED?</b>\n\n"
+        f"{pe('💰')} <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
+        f"❤️ <b>THANK YOU FOR JOINING</b> ❤️"
     )
     edit_message_text_smart(chat_id, message_id, verified_text, reply_markup=verified_markup)
     logger.info(f"🎉 [{user_id}] Verified & Unlocked Home directly!")
@@ -1011,18 +1027,9 @@ def main():
     bot_me = get_bot_info()
     logger.info(f"✅ Bot Connected: @{bot_me.get('username', BOT_USERNAME)} (ID: {bot_me.get('id')})")
 
-    # Set persistent Telegram Mini App menu button at bottom-left of chat
+    # Reset chat menu button to default (removes persistent side Open App button as requested)
     try:
-        tg_api(
-            "setChatMenuButton",
-            {
-                "menu_button": {
-                    "type": "web_app",
-                    "text": "Open App 🎁",
-                    "web_app": {"url": WEB_URL},
-                }
-            },
-        )
+        tg_api("setChatMenuButton", {"menu_button": {"type": "default"}})
     except Exception as e:
         logger.debug(f"Menu button note: {e}")
 
