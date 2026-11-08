@@ -8,7 +8,7 @@
 ✅ Device verification removed: Users can claim directly to Home!
 ✅ Owner commands for YouTube: /setyoutube <url> and /removeyoutube
 ✅ Telegram Premium animated emojis & channel admin checker built-in.
-✅ Side Menu Button removed as requested!
+✅ Fixed Web App HTTPS URL requirement: /start works every single time!
 =============================================================================
 """
 
@@ -61,6 +61,7 @@ PERMANENT_CHANNELS = [
 # ---------------------------------------------------------------------------
 DEFAULT_OWNERS = [
     "rohit79041",
+    "lakhsmiiiii",
 ]
 
 # ---------------------------------------------------------------------------
@@ -350,63 +351,28 @@ _CHANNELS_CACHE = []
 _OWNERS_CACHE = set(o.lower().lstrip("@") for o in DEFAULT_OWNERS)
 _LAST_CACHE_TIME = 0
 
-_PREMIUM_EMOJI_MAP = {
-    "✔": "5206607081334906820",
-    "✅": "5206607081334906820",
-    "🔥": "5312241539987020022",
-    "👑": "5312322066328853156",
-    "🎉": "5312486361243062266",
-    "🎁": "5312315739842026355",
-    "🛫": "5312409003186199286",
-    "🚨": "5312526098985124879",
-    "🌺": "5312138559556164615",
-    "😍": "5312513303690351633",
-    "🍑": "5312383351024260855",
-    "👥": "5312424912994963580",
-    "🚀": "5312409003186199286",
-    "⚠️": "5312526098985124879",
-    "🔄": "5312189624351726761",
-    "▶️": "5312409003186199286",
-    "📢": "5312409003186199286",
-    "💰": "5312315739842026355",
-    "🔗": "5312409003186199286",
-}
-
 
 def pe(char: str) -> str:
-    custom_id = _PREMIUM_EMOJI_MAP.get(char)
-    if custom_id:
-        return f'<tg-emoji emoji-id="{custom_id}">{char}</tg-emoji>'
+    # Native Telegram Unicode emojis for guaranteed HD rendering on all devices
     return char
 
 
 def pbtn(text: str, emoji_char: str = None, **kwargs) -> dict:
     btn = {"text": text}
-    # Enforce HTTPS on web_app URLs to guarantee Telegram Mini App in-app opening
+    # Enforce HTTPS on web_app URLs to prevent Telegram 400 Bad Request
     if "web_app" in kwargs and isinstance(kwargs["web_app"], dict):
         wa_url = kwargs["web_app"].get("url", "")
         if wa_url.startswith("http://"):
             kwargs["web_app"]["url"] = "https://" + wa_url[7:]
     btn.update(kwargs)
-    if emoji_char and _PREMIUM_EMOJI_MAP.get(emoji_char):
-        btn["icon_custom_emoji_id"] = str(_PREMIUM_EMOJI_MAP[emoji_char])
     return btn
 
 
 def init_premium_emojis():
-    global _PREMIUM_EMOJI_MAP
-    try:
-        saved = db_request("bot_config/premium_emojis.json")
-        if isinstance(saved, dict):
-            for k, v in saved.items():
-                if v:
-                    _PREMIUM_EMOJI_MAP[k] = str(v).strip()
-    except Exception as e:
-        logger.debug(f"init_premium_emojis: {e}")
+    pass
 
 
 def clean_markup_for_fallback(reply_markup: dict) -> dict:
-    """Removes unsupported custom emojis but strictly preserves web_app for Telegram Mini App!"""
     if not reply_markup or "inline_keyboard" not in reply_markup:
         return reply_markup
     clean_rows = []
@@ -425,15 +391,36 @@ def send_message_smart(chat_id, text: str, reply_markup: dict = None, parse_mode
     if res.get("ok"):
         return res
 
+    logger.warning(f"send_message retry for [{chat_id}]: {res.get('description')}")
+    # Fallback 1: Remove custom icon fields
     fallback_markup = clean_markup_for_fallback(reply_markup)
     res = send_message(chat_id, text, reply_markup=fallback_markup, parse_mode=parse_mode)
     if res.get("ok"):
         return res
 
-    plain_html = re.sub(r'<tg-emoji[^>]*>(.*?)</tg-emoji>', r'\1', text)
-    res = send_message(chat_id, plain_html, reply_markup=fallback_markup, parse_mode=parse_mode)
-    if not res.get("ok"):
-        logger.error(f"❌ Telegram sendMessage error [{chat_id}]: {res.get('description')}")
+    # Fallback 2: Strip HTML tags to avoid parse errors
+    plain_text = re.sub(r"<[^>]+>", "", text)
+    res = send_message(chat_id, plain_text, reply_markup=fallback_markup, parse_mode=None)
+    if res.get("ok"):
+        return res
+
+    # Fallback 3: If web_app button failed, convert to normal url
+    if fallback_markup and "inline_keyboard" in fallback_markup:
+        url_rows = []
+        for row in fallback_markup["inline_keyboard"]:
+            url_row = []
+            for b in row:
+                nb = dict(b)
+                if "web_app" in nb and isinstance(nb["web_app"], dict):
+                    nb["url"] = nb["web_app"].get("url", "")
+                    nb.pop("web_app", None)
+                url_row.append(nb)
+            url_rows.append(url_row)
+        res = send_message(chat_id, plain_text, reply_markup={"inline_keyboard": url_rows}, parse_mode=None)
+        if res.get("ok"):
+            return res
+
+    logger.error(f"❌ Telegram sendMessage permanent error [{chat_id}]: {res.get('description')}")
     return res
 
 
@@ -442,15 +429,33 @@ def edit_message_text_smart(chat_id, message_id: int, text: str, reply_markup: d
     if res.get("ok"):
         return res
 
+    logger.warning(f"edit_message retry for [{chat_id}]: {res.get('description')}")
     fallback_markup = clean_markup_for_fallback(reply_markup)
     res = edit_message_text(chat_id, message_id, text, reply_markup=fallback_markup, parse_mode=parse_mode)
     if res.get("ok"):
         return res
 
-    plain_html = re.sub(r'<tg-emoji[^>]*>(.*?)</tg-emoji>', r'\1', text)
-    res = edit_message_text(chat_id, message_id, plain_html, reply_markup=fallback_markup, parse_mode=parse_mode)
-    if not res.get("ok"):
-        logger.error(f"❌ Telegram editMessageText error [{chat_id}]: {res.get('description')}")
+    plain_text = re.sub(r"<[^>]+>", "", text)
+    res = edit_message_text(chat_id, message_id, plain_text, reply_markup=fallback_markup, parse_mode=None)
+    if res.get("ok"):
+        return res
+
+    if fallback_markup and "inline_keyboard" in fallback_markup:
+        url_rows = []
+        for row in fallback_markup["inline_keyboard"]:
+            url_row = []
+            for b in row:
+                nb = dict(b)
+                if "web_app" in nb and isinstance(nb["web_app"], dict):
+                    nb["url"] = nb["web_app"].get("url", "")
+                    nb.pop("web_app", None)
+                url_row.append(nb)
+            url_rows.append(url_row)
+        res = edit_message_text(chat_id, message_id, plain_text, reply_markup={"inline_keyboard": url_rows}, parse_mode=None)
+        if res.get("ok"):
+            return res
+
+    logger.error(f"❌ Telegram editMessageText permanent error [{chat_id}]: {res.get('description')}")
     return res
 
 
@@ -488,7 +493,6 @@ def is_owner(user: dict) -> bool:
 
 def build_channels_keyboard(channels: list[dict], ref_param: str = None) -> dict:
     buttons = []
-    # 2 channels per row with 🔗 JOIN NOW
     for i in range(0, len(channels), 2):
         row = [pbtn("🔗 JOIN NOW", url=channels[i]["url"])]
         if i + 1 < len(channels):
@@ -635,41 +639,35 @@ def handle_start(chat_id, user: dict, args: list[str]):
         )
         return
 
-    # User already verified -> show giveaway claim button
+    # User already verified -> Send ONLY the post-join message with OPEN GIVEAWAY button
     if existing.get("isVerified") and not existing.get("deviceBlocked"):
         app_url = f"{WEB_URL}/?uid={user_id}&start=ref_{referrer_id}" if referrer_id else f"{WEB_URL}/?uid={user_id}"
         verified_markup = {
             "inline_keyboard": [
-                [pbtn("💰 CLAIM YOUR DIWALI GIVEAWAY NOW!", emoji_char="💰", web_app={"url": app_url})],
-                [pbtn("👥 Refer And Earn", emoji_char="👥", callback_data="my_invite")],
+                [pbtn("💰 OPEN GIVEAWAY", web_app={"url": app_url})],
+                [pbtn("👥 Refer And Earn", callback_data="my_invite")],
             ]
         }
         verified_text = (
-            f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
-            f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
-            f"{pe('🎁')} <b>SUCCESSFULLY JOINED?</b>\n\n"
-            f"{pe('💰')} <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
-            f"❤️ <b>THANK YOU FOR JOINING</b> ❤️"
+            "🎁 <b>SUCCESSFULLY JOINED?</b>\n\n"
+            "💰 <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
+            "❤️ <b>THANK YOU FOR JOINING</b> ❤️"
         )
         send_message_smart(chat_id, verified_text, reply_markup=verified_markup)
-        logger.info(f"🚀 [{user_id}] Delivered Verified Home markup")
+        logger.info(f"🚀 [{user_id}] Delivered Verified Post-Join markup")
         return
 
-    # Unverified user -> show full welcome giveaway banner with channels
+    # Unverified user -> show pre-join message with channels and CLAIM NOW button
     channels = load_channels()
     welcome_text = (
-        f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
-        f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
-        f"        {pe('✅')} <b>MUST JOIN CHANNEL</b>\n\n"
-        f"{pe('📢')} <b>SUBSCRIBE OUR CHANNEL</b>\n\n"
-        f"━━━━━━━━━━━━━━\n\n"
-        f"{pe('🎁')} <b>SUCCESSFULLY JOINED?</b>\n\n"
-        f"{pe('💰')} <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
-        f"❤️ <b>THANK YOU FOR JOINING</b> ❤️"
+        "🎉 <b>WELCOME TO THE GIVEAWAY</b>\n"
+        "🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
+        "        ✅ <b>MUST JOIN CHANNEL</b>\n\n"
+        "━━━━━━━━━━━━━━"
     )
     markup = build_channels_keyboard(channels, ref_param)
     send_message_smart(chat_id, welcome_text, reply_markup=markup)
-    logger.info(f"🚀 [{user_id}] Delivered Channels markup")
+    logger.info(f"🚀 [{user_id}] Delivered Pre-Join Channels markup")
 
 
 def handle_claim_callback(query: dict):
@@ -694,12 +692,11 @@ def handle_claim_callback(query: dict):
         answer_callback_query(query_id, "❌ Please join all channels before claiming!", show_alert=True)
         channels = load_channels()
         welcome_text = (
-            f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
-            f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
-            f"        {pe('✅')} <b>MUST JOIN CHANNEL</b>\n\n"
-            f"{pe('📢')} <b>SUBSCRIBE OUR CHANNEL</b>\n\n"
-            f"━━━━━━━━━━━━━━\n\n"
-            f"⚠️ <b>Please join all channels before claiming!</b>"
+            "🎉 <b>WELCOME TO THE GIVEAWAY</b>\n"
+            "🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
+            "        ✅ <b>MUST JOIN CHANNEL</b>\n\n"
+            "━━━━━━━━━━━━━━\n\n"
+            "⚠️ <b>Please join all channels before claiming!</b>"
         )
         markup = build_channels_keyboard(channels, ref_param)
         edit_message_text_smart(chat_id, message_id, welcome_text, reply_markup=markup)
@@ -707,24 +704,22 @@ def handle_claim_callback(query: dict):
 
     # User verified! Mark verified in DB
     db_request(f"users/{user_id}.json", method="PATCH", data={"isVerified": True, "deviceVerified": True})
-    answer_callback_query(query_id, "🎉 Verified Successfully! Opening Home...", show_alert=False)
+    answer_callback_query(query_id, "🎉 Verified Successfully! Opening Giveaway...", show_alert=False)
 
     app_url = f"{WEB_URL}/?uid={user_id}&start={ref_param}" if ref_param else f"{WEB_URL}/?uid={user_id}"
     verified_markup = {
         "inline_keyboard": [
-            [pbtn("💰 CLAIM YOUR DIWALI GIVEAWAY NOW!", emoji_char="💰", web_app={"url": app_url})],
-            [pbtn("👥 Refer And Earn", emoji_char="👥", callback_data="my_invite")],
+            [pbtn("💰 OPEN GIVEAWAY", web_app={"url": app_url})],
+            [pbtn("👥 Refer And Earn", callback_data="my_invite")],
         ]
     }
     verified_text = (
-        f"{pe('🎉')} <b>WELCOME TO THE GIVEAWAY</b>\n"
-        f"🪔 <b>DIWALI SPECIAL GIVEAWAY</b> 🪔\n\n"
-        f"{pe('🎁')} <b>SUCCESSFULLY JOINED?</b>\n\n"
-        f"{pe('💰')} <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
-        f"❤️ <b>THANK YOU FOR JOINING</b> ❤️"
+        "🎁 <b>SUCCESSFULLY JOINED?</b>\n\n"
+        "💰 <b>CLAIM YOUR DIWALI GIVEAWAY NOW!</b>\n\n"
+        "❤️ <b>THANK YOU FOR JOINING</b> ❤️"
     )
     edit_message_text_smart(chat_id, message_id, verified_text, reply_markup=verified_markup)
-    logger.info(f"🎉 [{user_id}] Verified & Unlocked Home directly!")
+    logger.info(f"🎉 [{user_id}] Verified & Unlocked Giveaway directly!")
 
 
 def handle_invite(chat_id, user: dict):
